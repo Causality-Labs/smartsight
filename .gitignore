@@ -1,0 +1,11 @@
+# MCUXpresso SDK (re-create with west, see README)
+mcuxpresso-sdk/
+
+# Build output
+build/
+m7_app/build/
+
+# Editor / backup files
+*.orig
+*.swp
+.vscode/
