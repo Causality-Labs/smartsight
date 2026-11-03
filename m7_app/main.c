@@ -16,11 +16,13 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "app.h"
+#include "fsl_pwm.h"
 
 /*******************************************************************************
  * Definitions
  ******************************************************************************/
 #define APP_TASK_STACK_SIZE (256)
+#define PWM_TASK_STACK_SIZE (1024)
 #ifndef LOCAL_EPT_ADDR
 #define LOCAL_EPT_ADDR (30)
 #endif
@@ -36,11 +38,21 @@ static char app_buf[512]; /* Each RPMSG buffer can carry less than 512 payload *
  * Code
  ******************************************************************************/
 static TaskHandle_t app_task_handle = NULL;
+static TaskHandle_t pwm_task_handle = NULL;
 
 static struct rpmsg_lite_instance *volatile my_rpmsg = NULL;
 
 static struct rpmsg_lite_endpoint *volatile my_ept = NULL;
 static volatile rpmsg_queue_handle my_queue        = NULL;
+
+#define PWM_PERIOD_VALUE  30
+#define PWM_STEP_DELAY_MS 100
+
+/* Duty cycles (percent): 0 up to 100 and back down. The final 0 comes from wrapping to index 0 */
+static const uint8_t pwm_duty_cycles[] = {0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 
+                                          90, 80, 70, 60, 50, 40, 30, 20, 10};
+#define PWM_DUTY_COUNT (sizeof(pwm_duty_cycles) / sizeof(pwm_duty_cycles[0]))
+
 void app_destroy_task(void)
 {
     if (app_task_handle)
@@ -80,19 +92,7 @@ void app_task(void *param)
     /* Print the initial banner */
     PRINTF("\r\nRPMSG String Echo FreeRTOS RTOS API Demo...\r\n");
 
-#ifdef MCMGR_USED
-    uint32_t startupData;
-
-    /* Get the startup data */
-    (void)MCMGR_GetStartupData(kMCMGR_Core1, &startupData, kMCMGR_Core0);
-
-    my_rpmsg = rpmsg_lite_remote_init((void *)startupData, RPMSG_LITE_LINK_ID, RL_NO_FLAGS);
-
-    /* Signal the other core we are ready */
-    (void)MCMGR_SignalReady(kMCMGR_Core1);
-#else
     my_rpmsg = rpmsg_lite_remote_init((void *)RPMSG_LITE_SHMEM_BASE, RPMSG_LITE_LINK_ID, RL_NO_FLAGS);
-#endif /* MCMGR_USED */
 
     rpmsg_lite_wait_for_link_up(my_rpmsg, RL_BLOCK);
 
@@ -148,6 +148,79 @@ void app_task(void *param)
     }
 }
 
+void pwm_task(void *param)
+{
+
+    PRINTF("\r\nRPMSG String Echo FreeRTOS RTOS API Demo...\r\n");
+
+    pwm_config_t pwmConfig;
+    uint32_t pwmDutycycle = 0U;
+    /*!
+     * config->enableStopMode = false;
+     * config->enableDozeMode = false;
+     * config->enableWaitMode = false;
+     * config->enableDebugMode = false;
+     * config->clockSource = kPWM_LowFrequencyClock;
+     * config->prescale = 0U;
+     * config->outputConfig = kPWM_SetAtRolloverAndClearAtcomparison;
+     * config->fifoWater = kPWM_FIFOWaterMark_2;
+     * config->sampleRepeat = kPWM_EachSampleOnce;
+     * config->byteSwap = kPWM_ByteNoSwap;
+     * config->halfWordSwap = kPWM_HalfWordNoSwap;
+     */
+    PWM_GetDefaultConfig(&pwmConfig);
+    PRINTF("\r\nPWM default config: clock source %d, prescale %d\r\n", pwmConfig.clockSource, pwmConfig.prescale);
+
+    /* Initialize PWM module */
+    status_t status = PWM_Init(DEMO_PWM_BASEADDR, &pwmConfig);
+    if (status != kStatus_Success)
+    {
+        PRINTF("PWM_Init failed: status %d\r\n", status);
+        /* Park the task without blocking others (vTaskDelete is disabled in FreeRTOSConfig.h) */
+        for (;;)
+        {
+            vTaskDelay(portMAX_DELAY);
+        }
+    }
+    PRINTF("PWM_Init OK\r\n");
+
+    /* Three initial samples be written to the PWM Sample Register */
+    for (pwmDutycycle = 0u; pwmDutycycle < 3; pwmDutycycle++)
+    {
+        PWM_SetSampleValue(DEMO_PWM_BASEADDR, pwmDutycycle);
+    }
+
+    /* Check and Clear interrupt status flags */
+    if (PWM_GetStatusFlags(DEMO_PWM_BASEADDR))
+    {
+        PWM_clearStatusFlags(DEMO_PWM_BASEADDR,
+                             kPWM_FIFOEmptyFlag | kPWM_RolloverFlag | kPWM_CompareFlag | kPWM_FIFOWriteErrorFlag);
+    }
+
+    /* Write the period to the PWM Period Register */
+    PWM_SetPeriodValue(DEMO_PWM_BASEADDR, PWM_PERIOD_VALUE);
+
+    PWM_StartTimer(DEMO_PWM_BASEADDR);
+
+    PRINTF("\r\nPWM started: period %d, %d steps, %d ms per step\r\n", PWM_PERIOD_VALUE, PWM_DUTY_COUNT,
+           PWM_STEP_DELAY_MS);
+
+    uint32_t index = 0U;
+
+    while (1)
+    {
+        /* Output period is PWM_PERIOD_VALUE + 2 counts, so scale percent against that */
+        uint32_t sample = ((PWM_PERIOD_VALUE + 2U) * pwm_duty_cycles[index]) / 100U;
+        PWM_SetSampleValue(DEMO_PWM_BASEADDR, sample);
+
+        // PRINTF("PWM step %d: duty %d%% (sample %d)\r\n", index, pwm_duty_cycles[index], sample);
+
+        vTaskDelay(pdMS_TO_TICKS(PWM_STEP_DELAY_MS));
+
+        index = (index + 1U) % PWM_DUTY_COUNT;
+    }
+}
+
 void app_create_task(void)
 {
     if (app_task_handle == NULL &&
@@ -159,6 +232,16 @@ void app_create_task(void)
     }
 }
 
+void pwm_create_task(void)
+{
+    if (pwm_task_handle == NULL &&
+        xTaskCreate(pwm_task, "PWM_TASK", PWM_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &pwm_task_handle) != pdPASS)
+    {
+        PRINTF("\r\nFailed to create pwm task\r\n");
+        for (;;)
+            ;
+    }
+}
 /*!
  * @brief Main function
  */
@@ -167,12 +250,9 @@ int main(void)
     /* Initialize standard SDK demo application pins */
     BOARD_InitHardware();
 
-#ifdef MCMGR_USED
-    /* Initialize MCMGR before calling its API */
-    (void)MCMGR_Init();
-#endif /* MCMGR_USED */
-
     app_create_task();
+    pwm_create_task();
+
     vTaskStartScheduler();
 
     PRINTF("Failed to start FreeRTOS on core0.\n");

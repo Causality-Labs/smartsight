@@ -17,6 +17,9 @@
 #define RPMSG_LITE_NS_ANNOUNCE_STRING "rpmsg-virtual-tty-channel-1"
 /*${macro:end}*/
 
+#define DEMO_PWM_BASEADDR   PWM4
+#define DEMO_PWM_IRQn       PWM4_IRQn
+#define DEMO_PWM_IRQHandler PWM4_IRQHandler
 /*******************************************************************************
  * Prototypes
  ******************************************************************************/

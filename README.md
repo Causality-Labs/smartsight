@@ -54,6 +54,48 @@ Output in `m7_app/build/`:
 
 Use `--config release` or `debug` to run from TCM, and `ddr_release` or `ddr_debug` to run from DDR.
 
+## Running on the target
+
+The M7 is started from Linux with remoteproc. The M7 debug console is UART4, so UART4 must be disabled in the Linux device tree.
+
+1. Copy the `.elf` to the target. remoteproc loads firmware from `/lib/firmware`:
+
+   ```bash
+   # On the host
+   scp m7_app/build/smartsight_firmware_cm7.elf root@10.10.10.28:/lib/firmware/
+   ```
+
+2. Tell remoteproc which firmware file to load:
+
+   ```bash
+   # On the target
+   echo -n smartsight_firmware_cm7.elf > /sys/class/remoteproc/remoteproc0/firmware
+   ```
+
+3. Check that the M7 isn't already running. If the state is `running`, stop it first (step 5):
+
+   ```bash
+   cat /sys/class/remoteproc/remoteproc0/state   # should print: offline
+   ```
+
+4. Start the M7:
+
+   ```bash
+   echo start > /sys/class/remoteproc/remoteproc0/state
+   cat /sys/class/remoteproc/remoteproc0/state   # should print: running
+   ```
+
+   The firmware's output appears on the M7 debug UART (UART4).
+
+5. Stop the M7:
+
+   ```bash
+   echo stop > /sys/class/remoteproc/remoteproc0/state
+   cat /sys/class/remoteproc/remoteproc0/state   # should print: offline
+   ```
+
+To load a new build, stop the M7, copy the new `.elf` over the old one, and start it again. Step 2 is only needed when the file name changes.
+
 ## Where to change things
 
 | What | Where |
