@@ -44,6 +44,8 @@ endif()
 
 mcux_add_source(
     SOURCES main.c
+            servo.c
+            servo.h
 )
 
 mcux_add_include(

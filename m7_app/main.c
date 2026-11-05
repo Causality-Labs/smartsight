@@ -17,12 +17,14 @@
 #include "task.h"
 #include "app.h"
 #include "fsl_pwm.h"
+#include "servo.h"
 
 /*******************************************************************************
  * Definitions
  ******************************************************************************/
 #define APP_TASK_STACK_SIZE (256)
-#define PWM_TASK_STACK_SIZE (1024)
+#define PAN_TASK_STACK_SIZE (1024)
+#define TILT_TASK_STACK_SIZE (1024)
 #ifndef LOCAL_EPT_ADDR
 #define LOCAL_EPT_ADDR (30)
 #endif
@@ -38,20 +40,25 @@ static char app_buf[512]; /* Each RPMSG buffer can carry less than 512 payload *
  * Code
  ******************************************************************************/
 static TaskHandle_t app_task_handle = NULL;
-static TaskHandle_t pwm_task_handle = NULL;
+static TaskHandle_t pan_task_handle = NULL;
+static TaskHandle_t tilt_task_handle = NULL;
 
 static struct rpmsg_lite_instance *volatile my_rpmsg = NULL;
 
 static struct rpmsg_lite_endpoint *volatile my_ept = NULL;
 static volatile rpmsg_queue_handle my_queue        = NULL;
 
-#define PWM_PERIOD_VALUE  30
-#define PWM_STEP_DELAY_MS 100
+/* Pan sweep: PAN_STEP_DEG every PAN_STEP_DELAY_MS between 0 and PAN_ANGLE_MAX_DEG.
+ * Don't go below 20 ms: that's one servo frame, faster updates overflow the PWM FIFO */
+#define PAN_ANGLE_MAX_DEG  180.0f
+#define PAN_STEP_DEG       1.0f
+#define PAN_STEP_DELAY_MS  20U
 
-/* Duty cycles (percent): 0 up to 100 and back down. The final 0 comes from wrapping to index 0 */
-static const uint8_t pwm_duty_cycles[] = {0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 
-                                          90, 80, 70, 60, 50, 40, 30, 20, 10};
-#define PWM_DUTY_COUNT (sizeof(pwm_duty_cycles) / sizeof(pwm_duty_cycles[0]))
+/* Tilt sweep: same as pan, on its own servo */
+#define TILT_ANGLE_MIN_DEG  150.0f
+#define TILT_ANGLE_MAX_DEG  180.0f
+#define TILT_STEP_DEG       1.0f
+#define TILT_STEP_DELAY_MS  20U
 
 void app_destroy_task(void)
 {
@@ -148,76 +155,59 @@ void app_task(void *param)
     }
 }
 
-void pwm_task(void *param)
+void pan_task(void *param)
 {
 
-    PRINTF("\r\nRPMSG String Echo FreeRTOS RTOS API Demo...\r\n");
-
-    pwm_config_t pwmConfig;
-    uint32_t pwmDutycycle = 0U;
-    /*!
-     * config->enableStopMode = false;
-     * config->enableDozeMode = false;
-     * config->enableWaitMode = false;
-     * config->enableDebugMode = false;
-     * config->clockSource = kPWM_LowFrequencyClock;
-     * config->prescale = 0U;
-     * config->outputConfig = kPWM_SetAtRolloverAndClearAtcomparison;
-     * config->fifoWater = kPWM_FIFOWaterMark_2;
-     * config->sampleRepeat = kPWM_EachSampleOnce;
-     * config->byteSwap = kPWM_ByteNoSwap;
-     * config->halfWordSwap = kPWM_HalfWordNoSwap;
-     */
-    PWM_GetDefaultConfig(&pwmConfig);
-    PRINTF("\r\nPWM default config: clock source %d, prescale %d\r\n", pwmConfig.clockSource, pwmConfig.prescale);
-
-    /* Initialize PWM module */
-    status_t status = PWM_Init(DEMO_PWM_BASEADDR, &pwmConfig);
-    if (status != kStatus_Success)
+    PRINTF("\r\nPan Servo Task starting..\r\n");
+    servo_t pan_servo = {0};
+    float pan_angle = 0.0f;
+    float pan_step  = PAN_STEP_DEG;
+    if (servo_init(&pan_servo, PWM_CHANNEL_4, pan_angle) != SERVO_STATUS_OK)
     {
-        PRINTF("PWM_Init failed: status %d\r\n", status);
-        /* Park the task without blocking others (vTaskDelete is disabled in FreeRTOSConfig.h) */
-        for (;;)
-        {
-            vTaskDelay(portMAX_DELAY);
-        }
-    }
-    PRINTF("PWM_Init OK\r\n");
-
-    /* Three initial samples be written to the PWM Sample Register */
-    for (pwmDutycycle = 0u; pwmDutycycle < 3; pwmDutycycle++)
-    {
-        PWM_SetSampleValue(DEMO_PWM_BASEADDR, pwmDutycycle);
+        PRINTF("\r\nFailed to initialize Pan Servo..\r\n");
+        assert(false);
     }
 
-    /* Check and Clear interrupt status flags */
-    if (PWM_GetStatusFlags(DEMO_PWM_BASEADDR))
-    {
-        PWM_clearStatusFlags(DEMO_PWM_BASEADDR,
-                             kPWM_FIFOEmptyFlag | kPWM_RolloverFlag | kPWM_CompareFlag | kPWM_FIFOWriteErrorFlag);
-    }
-
-    /* Write the period to the PWM Period Register */
-    PWM_SetPeriodValue(DEMO_PWM_BASEADDR, PWM_PERIOD_VALUE);
-
-    PWM_StartTimer(DEMO_PWM_BASEADDR);
-
-    PRINTF("\r\nPWM started: period %d, %d steps, %d ms per step\r\n", PWM_PERIOD_VALUE, PWM_DUTY_COUNT,
-           PWM_STEP_DELAY_MS);
-
-    uint32_t index = 0U;
 
     while (1)
     {
-        /* Output period is PWM_PERIOD_VALUE + 2 counts, so scale percent against that */
-        uint32_t sample = ((PWM_PERIOD_VALUE + 2U) * pwm_duty_cycles[index]) / 100U;
-        PWM_SetSampleValue(DEMO_PWM_BASEADDR, sample);
+        servo_set_position(&pan_servo, pan_angle);
 
-        // PRINTF("PWM step %d: duty %d%% (sample %d)\r\n", index, pwm_duty_cycles[index], sample);
+        pan_angle += pan_step;
+        if (pan_angle >= PAN_ANGLE_MAX_DEG || pan_angle <= 0.0f)
+        {
+            pan_step = -pan_step; /* Reverse at either end */
+        }
 
-        vTaskDelay(pdMS_TO_TICKS(PWM_STEP_DELAY_MS));
+        vTaskDelay(pdMS_TO_TICKS(PAN_STEP_DELAY_MS));
+    }
+}
 
-        index = (index + 1U) % PWM_DUTY_COUNT;
+void tilt_task(void *param)
+{
+
+    PRINTF("\r\nTilt Servo Task starting..\r\n");
+    servo_t tilt_servo = {0};
+    float tilt_angle = 180;
+    float tilt_step  = -TILT_STEP_DEG; /* Start at 180, head down to 150 */
+    if (servo_init(&tilt_servo, PWM_CHANNEL_1, tilt_angle) != SERVO_STATUS_OK)
+    {
+        PRINTF("\r\nFailed to initialize Tilt Servo..\r\n");
+        assert(false);
+    }
+
+
+    while (1)
+    {
+        servo_set_position(&tilt_servo, tilt_angle);
+
+        tilt_angle += tilt_step;
+        if (tilt_angle >= TILT_ANGLE_MAX_DEG || tilt_angle <= TILT_ANGLE_MIN_DEG)
+        {
+            tilt_step = -tilt_step; /* Reverse at either end */
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(TILT_STEP_DELAY_MS));
     }
 }
 
@@ -232,12 +222,23 @@ void app_create_task(void)
     }
 }
 
-void pwm_create_task(void)
+void pan_create_task(void)
 {
-    if (pwm_task_handle == NULL &&
-        xTaskCreate(pwm_task, "PWM_TASK", PWM_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &pwm_task_handle) != pdPASS)
+    if (pan_task_handle == NULL &&
+        xTaskCreate(pan_task, "PAN_TASK", PAN_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &pan_task_handle) != pdPASS)
     {
-        PRINTF("\r\nFailed to create pwm task\r\n");
+        PRINTF("\r\nFailed to create pan task\r\n");
+        for (;;)
+            ;
+    }
+}
+
+void tilt_create_task(void)
+{
+    if (tilt_task_handle == NULL &&
+        xTaskCreate(tilt_task, "TILT_TASK", TILT_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &tilt_task_handle) != pdPASS)
+    {
+        PRINTF("\r\nFailed to create tilt task\r\n");
         for (;;)
             ;
     }
@@ -251,7 +252,8 @@ int main(void)
     BOARD_InitHardware();
 
     app_create_task();
-    pwm_create_task();
+    pan_create_task();
+    tilt_create_task();
 
     vTaskStartScheduler();
 

@@ -65,7 +65,13 @@ void BOARD_InitPins(void) {                                /*!< Function assigne
                         IOMUXC_SW_PAD_CTL_PAD_PE_MASK);
 
     IOMUXC_SetPinMux(IOMUXC_SAI5_RXFS_PWM4_OUT, 0U);
-    IOMUXC_SetPinConfig(IOMUXC_SAI5_RXFS_PWM4_OUT, 
+    IOMUXC_SetPinConfig(IOMUXC_SAI5_RXFS_PWM4_OUT,
+                        IOMUXC_SW_PAD_CTL_PAD_DSE(3U) |
+                        IOMUXC_SW_PAD_CTL_PAD_PUE_MASK |
+                        IOMUXC_SW_PAD_CTL_PAD_PE_MASK);
+
+    IOMUXC_SetPinMux(IOMUXC_GPIO1_IO01_PWM1_OUT, 0U);
+    IOMUXC_SetPinConfig(IOMUXC_GPIO1_IO01_PWM1_OUT,
                         IOMUXC_SW_PAD_CTL_PAD_DSE(3U) |
                         IOMUXC_SW_PAD_CTL_PAD_PUE_MASK |
                         IOMUXC_SW_PAD_CTL_PAD_PE_MASK);
