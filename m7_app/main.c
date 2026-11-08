@@ -17,14 +17,13 @@
 #include "task.h"
 #include "app.h"
 #include "fsl_pwm.h"
-#include "servo.h"
+#include "pan_tilt_mount.h"
 
 /*******************************************************************************
  * Definitions
  ******************************************************************************/
 #define APP_TASK_STACK_SIZE (256)
-#define PAN_TASK_STACK_SIZE (1024)
-#define TILT_TASK_STACK_SIZE (1024)
+#define PAN_TILT_TASK_STACK_SIZE (1024)
 #ifndef LOCAL_EPT_ADDR
 #define LOCAL_EPT_ADDR (30)
 #endif
@@ -40,25 +39,38 @@ static char app_buf[512]; /* Each RPMSG buffer can carry less than 512 payload *
  * Code
  ******************************************************************************/
 static TaskHandle_t app_task_handle = NULL;
-static TaskHandle_t pan_task_handle = NULL;
-static TaskHandle_t tilt_task_handle = NULL;
+static TaskHandle_t pan_tilt_task_handle = NULL;
 
 static struct rpmsg_lite_instance *volatile my_rpmsg = NULL;
 
 static struct rpmsg_lite_endpoint *volatile my_ept = NULL;
 static volatile rpmsg_queue_handle my_queue        = NULL;
 
-/* Pan sweep: PAN_STEP_DEG every PAN_STEP_DELAY_MS between 0 and PAN_ANGLE_MAX_DEG.
- * Don't go below 20 ms: that's one servo frame, faster updates overflow the PWM FIFO */
-#define PAN_ANGLE_MAX_DEG  180.0f
-#define PAN_STEP_DEG       1.0f
-#define PAN_STEP_DELAY_MS  20U
+#define PAN_TILT_STEP_DELAY_MS 20U
 
-/* Tilt sweep: same as pan, on its own servo */
-#define TILT_ANGLE_MIN_DEG  150.0f
-#define TILT_ANGLE_MAX_DEG  180.0f
-#define TILT_STEP_DEG       1.0f
-#define TILT_STEP_DELAY_MS  20U
+static const pan_tilt_mount_config_t pan_tilt_mount_config = {
+    .pan = {
+        .channel       = PWM_CHANNEL_4,
+        .pulse_min_us  = 500U,
+        .pulse_max_us  = 2400U,
+        .min_angle_deg = 0.0f,
+        .max_angle_deg = 180.0f,
+        .offset_deg    = 0.0f,
+    },
+    .tilt = {
+        .channel       = PWM_CHANNEL_1,
+        .pulse_min_us  = 500U,
+        .pulse_max_us  = 2400U,
+        .min_angle_deg = 150.0f,
+        .max_angle_deg = 180.0f,
+        .offset_deg    = 0.0f,
+    },
+    .pan_home_deg  = 90.0f,
+    .tilt_home_deg = 165.0f,
+    .max_step_deg  = 1.0f,
+    .max_pan_step_deg  = 1.0f,
+    .max_tilt_step_deg  = 1.0f,
+};
 
 void app_destroy_task(void)
 {
@@ -155,61 +167,43 @@ void app_task(void *param)
     }
 }
 
-void pan_task(void *param)
+void pan_tilt_task(void *param)
 {
+    PRINTF("\r\nPan Tilt Task starting..\r\n");
 
-    PRINTF("\r\nPan Servo Task starting..\r\n");
-    servo_t pan_servo = {0};
-    float pan_angle = 0.0f;
-    float pan_step  = PAN_STEP_DEG;
-    if (servo_init(&pan_servo, PWM_CHANNEL_4, pan_angle) != SERVO_STATUS_OK)
+    pan_tilt_mount_t mount = {0};
+    bool pan_far           = true;
+    bool tilt_far          = true;
+
+    if (pan_tilt_mount_init(&mount, &pan_tilt_mount_config) != PAN_TILT_MOUNT_STATUS_OK)
     {
-        PRINTF("\r\nFailed to initialize Pan Servo..\r\n");
+        PRINTF("\r\nFailed to initialize Pan Tilt Mount..\r\n");
         assert(false);
     }
 
+    pan_tilt_mount_target_position(&mount, 180.0f, 150.0f);
 
     while (1)
     {
-        servo_set_position(&pan_servo, pan_angle);
+        if (pan_tilt_mount_move(&mount) == PAN_TILT_MOVING_ERROR)
+            PRINTF("\r\nPan Tilt move failed..\r\n");
 
-        pan_angle += pan_step;
-        if (pan_angle >= PAN_ANGLE_MAX_DEG || pan_angle <= 0.0f)
+        if (pan_tilt_mount_pan_at_target(&mount))
         {
-            pan_step = -pan_step; /* Reverse at either end */
+            pan_far = !pan_far;
+            pan_tilt_mount_pan_target(&mount, pan_far ? 180.0f : 0.0f);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(PAN_STEP_DELAY_MS));
+        if (pan_tilt_mount_tilt_at_target(&mount))
+        {
+            tilt_far = !tilt_far;
+            pan_tilt_mount_tilt_target(&mount, tilt_far ? 150.0f : 180.0f);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(PAN_TILT_STEP_DELAY_MS));
     }
 }
 
-void tilt_task(void *param)
-{
-
-    PRINTF("\r\nTilt Servo Task starting..\r\n");
-    servo_t tilt_servo = {0};
-    float tilt_angle = 180;
-    float tilt_step  = -TILT_STEP_DEG; /* Start at 180, head down to 150 */
-    if (servo_init(&tilt_servo, PWM_CHANNEL_1, tilt_angle) != SERVO_STATUS_OK)
-    {
-        PRINTF("\r\nFailed to initialize Tilt Servo..\r\n");
-        assert(false);
-    }
-
-
-    while (1)
-    {
-        servo_set_position(&tilt_servo, tilt_angle);
-
-        tilt_angle += tilt_step;
-        if (tilt_angle >= TILT_ANGLE_MAX_DEG || tilt_angle <= TILT_ANGLE_MIN_DEG)
-        {
-            tilt_step = -tilt_step; /* Reverse at either end */
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(TILT_STEP_DELAY_MS));
-    }
-}
 
 void app_create_task(void)
 {
@@ -222,27 +216,18 @@ void app_create_task(void)
     }
 }
 
-void pan_create_task(void)
+void pan_tilt_create_task(void)
 {
-    if (pan_task_handle == NULL &&
-        xTaskCreate(pan_task, "PAN_TASK", PAN_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &pan_task_handle) != pdPASS)
+    if (pan_tilt_task_handle == NULL &&
+        xTaskCreate(pan_tilt_task, "PAN_TILT_TASK", PAN_TILT_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1,
+                    &pan_tilt_task_handle) != pdPASS)
     {
-        PRINTF("\r\nFailed to create pan task\r\n");
+        PRINTF("\r\nFailed to create pan tilt task\r\n");
         for (;;)
             ;
     }
 }
 
-void tilt_create_task(void)
-{
-    if (tilt_task_handle == NULL &&
-        xTaskCreate(tilt_task, "TILT_TASK", TILT_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &tilt_task_handle) != pdPASS)
-    {
-        PRINTF("\r\nFailed to create tilt task\r\n");
-        for (;;)
-            ;
-    }
-}
 /*!
  * @brief Main function
  */
@@ -252,8 +237,7 @@ int main(void)
     BOARD_InitHardware();
 
     app_create_task();
-    pan_create_task();
-    tilt_create_task();
+    pan_tilt_create_task();
 
     vTaskStartScheduler();
 

@@ -46,6 +46,8 @@ mcux_add_source(
     SOURCES main.c
             servo.c
             servo.h
+            pan_tilt_mount.c
+            pan_tilt_mount.h
 )
 
 mcux_add_include(

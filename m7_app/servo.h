@@ -11,8 +11,9 @@
 typedef enum 
 {
     SERVO_STATUS_OK = 0,
-    SERVO_STATUS_ERROR
-} servo_status_t; 
+    SERVO_STATUS_ERROR,
+    SERVO_STATUS_BUSY    /* PWM channel already owned by another servo */
+} servo_status_t;
 
 typedef enum 
 {
@@ -21,27 +22,31 @@ typedef enum
     PWM_CHANNEL_3,
     PWM_CHANNEL_4,
     PWM_CHANEL_MAX
-} pwm_channel_t; 
+} pwm_channel_t;
 
-typedef struct
-{
-    pwm_channel_t pwm_channel;
+typedef struct {
+    pwm_channel_t channel;
+    uint16_t pulse_min_us;
+    uint16_t pulse_max_us;
+    float    min_angle_deg;
+    float max_angle_deg;
+    float    offset_deg;
+} servo_config_t;
+
+
+typedef struct {
+    servo_config_t config;
+    float angle_deg;
+    bool initialized;
     bool enabled;
 } servo_t;
 
 
-servo_status_t servo_init(servo_t *servo, pwm_channel_t pwm_channel, float start_angle_deg);
+servo_status_t servo_init(servo_t *servo, const servo_config_t *config, float start_angle_deg);
 servo_status_t servo_set_position(servo_t *servo, float angle_deg);
-
-// void servo_set_limit(servo_t *handler, float min, float max);
-
-// void servo_set_offset(servo_t *handler, float angle_deg);
-
-// float servo_duty_ms(float angle_deg);
-
-// void servo_set_position(servo_t *handler, float angle_deg);
-
-
-// void servo_sweep(servo_t *handler, float start_angle_deg, float end_angle_deg, float step, uint32_t step_delay_ms);
+float          servo_get_position(const servo_t *servo);
+servo_status_t servo_enable(servo_t *servo);
+servo_status_t servo_disable(servo_t *servo);
+servo_status_t servo_deinit(servo_t *servo);
 
 #endif /* SERVO_H */
