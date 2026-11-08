@@ -22,7 +22,7 @@
 /*******************************************************************************
  * Definitions
  ******************************************************************************/
-#define APP_TASK_STACK_SIZE (256)
+#define MESSAGE_TASK_STACK_SIZE (256)
 #define PAN_TILT_TASK_STACK_SIZE (1024)
 #ifndef LOCAL_EPT_ADDR
 #define LOCAL_EPT_ADDR (30)
@@ -38,7 +38,7 @@ static char app_buf[512]; /* Each RPMSG buffer can carry less than 512 payload *
 /*******************************************************************************
  * Code
  ******************************************************************************/
-static TaskHandle_t app_task_handle = NULL;
+static TaskHandle_t message_task_handle = NULL;
 static TaskHandle_t pan_tilt_task_handle = NULL;
 
 static struct rpmsg_lite_instance *volatile my_rpmsg = NULL;
@@ -72,12 +72,12 @@ static const pan_tilt_mount_config_t pan_tilt_mount_config = {
     .max_tilt_step_deg  = 1.0f,
 };
 
-void app_destroy_task(void)
+void message_destroy_task(void)
 {
-    if (app_task_handle)
+    if (message_task_handle)
     {
-        vTaskDelete(app_task_handle);
-        app_task_handle = NULL;
+        vTaskDelete(message_task_handle);
+        message_task_handle = NULL;
     }
 
     if (my_ept)
@@ -99,7 +99,7 @@ void app_destroy_task(void)
     }
 }
 
-void app_task(void *param)
+void message_task(void *param)
 {
     volatile uint32_t remote_addr = 0U;
     void *rx_buf;
@@ -205,12 +205,12 @@ void pan_tilt_task(void *param)
 }
 
 
-void app_create_task(void)
+void message_create_task(void)
 {
-    if (app_task_handle == NULL &&
-        xTaskCreate(app_task, "APP_TASK", APP_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &app_task_handle) != pdPASS)
+    if (message_task_handle == NULL &&
+        xTaskCreate(message_task, "MESSAGE_TASK", MESSAGE_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &message_task_handle) != pdPASS)
     {
-        PRINTF("\r\nFailed to create application task\r\n");
+        PRINTF("\r\nFailed to create message task\r\n");
         for (;;)
             ;
     }
@@ -236,7 +236,7 @@ int main(void)
     /* Initialize standard SDK demo application pins */
     BOARD_InitHardware();
 
-    app_create_task();
+    message_create_task();
     pan_tilt_create_task();
 
     vTaskStartScheduler();
