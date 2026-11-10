@@ -40,6 +40,11 @@ typedef struct
     float tilt_target_deg;
 } pan_tilt_mount_t;
 
+typedef struct {
+    float pan_position;
+    float tilt_position;
+} pan_tilt_position_t;
+
 pan_tilt_mount_status_t pan_tilt_mount_init(pan_tilt_mount_t *mount,
                                             const pan_tilt_mount_config_t *config);
 pan_tilt_mount_status_t pan_tilt_mount_target_position(pan_tilt_mount_t *mount,

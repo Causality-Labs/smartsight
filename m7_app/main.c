@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "rpmsg_lite.h"
 #include "rpmsg_queue.h"
 #include "rpmsg_ns.h"
@@ -15,9 +16,11 @@
 #include "fsl_debug_console.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "queue.h"
 #include "app.h"
 #include "fsl_pwm.h"
 #include "pan_tilt_mount.h"
+#include "emulate_path.h"
 
 /*******************************************************************************
  * Definitions
@@ -47,30 +50,9 @@ static struct rpmsg_lite_endpoint *volatile my_ept = NULL;
 static volatile rpmsg_queue_handle my_queue        = NULL;
 
 #define PAN_TILT_STEP_DELAY_MS 20U
+#define MESSAGE_TASK_DELAY_MS 100U
 
-static const pan_tilt_mount_config_t pan_tilt_mount_config = {
-    .pan = {
-        .channel       = PWM_CHANNEL_4,
-        .pulse_min_us  = 500U,
-        .pulse_max_us  = 2400U,
-        .min_angle_deg = 0.0f,
-        .max_angle_deg = 180.0f,
-        .offset_deg    = 0.0f,
-    },
-    .tilt = {
-        .channel       = PWM_CHANNEL_1,
-        .pulse_min_us  = 500U,
-        .pulse_max_us  = 2400U,
-        .min_angle_deg = 150.0f,
-        .max_angle_deg = 180.0f,
-        .offset_deg    = 0.0f,
-    },
-    .pan_home_deg  = 90.0f,
-    .tilt_home_deg = 165.0f,
-    .max_step_deg  = 1.0f,
-    .max_pan_step_deg  = 1.0f,
-    .max_tilt_step_deg  = 1.0f,
-};
+static QueueHandle_t xPositionQueue;
 
 void message_destroy_task(void)
 {
@@ -167,39 +149,70 @@ void message_task(void *param)
     }
 }
 
+void fake_message_task(void *param)
+{
+
+    PRINTF("\r\nFake Message Task up and running...\r\n");
+    TickType_t last_wake = xTaskGetTickCount();
+
+
+    for (;;)
+    {
+        pan_tilt_position_t tgt;
+        random_walk_generator(&tgt);
+
+        xQueueOverwrite(xPositionQueue, &tgt);
+
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(50));
+
+    }
+}
+
 void pan_tilt_task(void *param)
 {
     PRINTF("\r\nPan Tilt Task starting..\r\n");
 
+    static const pan_tilt_mount_config_t pan_tilt_mount_config = {
+        .pan = {
+            .channel       = PWM_CHANNEL_4,
+            .pulse_min_us  = 500U,
+            .pulse_max_us  = 2400U,
+            .min_angle_deg = 0.0f,
+            .max_angle_deg = 180.0f,
+            .offset_deg    = 0.0f,
+        },
+        .tilt = {
+            .channel       = PWM_CHANNEL_1,
+            .pulse_min_us  = 500U,
+            .pulse_max_us  = 2400U,
+            .min_angle_deg = 150.0f,
+            .max_angle_deg = 180.0f,
+            .offset_deg    = 0.0f,
+        },
+        .pan_home_deg  = 90.0f,
+        .tilt_home_deg = 165.0f,
+        .max_pan_step_deg  = 1.0f,
+        .max_tilt_step_deg  = 1.0f,
+    };
+
     pan_tilt_mount_t mount = {0};
-    bool pan_far           = true;
-    bool tilt_far          = true;
+    pan_tilt_position_t position = {0};
 
     if (pan_tilt_mount_init(&mount, &pan_tilt_mount_config) != PAN_TILT_MOUNT_STATUS_OK)
     {
         PRINTF("\r\nFailed to initialize Pan Tilt Mount..\r\n");
         assert(false);
     }
-
-    pan_tilt_mount_target_position(&mount, 180.0f, 150.0f);
+    vTaskDelay(pdMS_TO_TICKS(5000)); // Wait for Servo to Home.
 
     while (1)
     {
-        if (pan_tilt_mount_move(&mount) == PAN_TILT_MOVING_ERROR)
-            PRINTF("\r\nPan Tilt move failed..\r\n");
-
-        if (pan_tilt_mount_pan_at_target(&mount))
+        if (xQueueReceive(xPositionQueue, &position, 0) == pdPASS)
         {
-            pan_far = !pan_far;
-            pan_tilt_mount_pan_target(&mount, pan_far ? 180.0f : 0.0f);
+            pan_tilt_mount_target_position(&mount, position.pan_position, position.tilt_position);
         }
 
-        if (pan_tilt_mount_tilt_at_target(&mount))
-        {
-            tilt_far = !tilt_far;
-            pan_tilt_mount_tilt_target(&mount, tilt_far ? 150.0f : 180.0f);
-        }
-
+        pan_tilt_mount_move(&mount);
         vTaskDelay(pdMS_TO_TICKS(PAN_TILT_STEP_DELAY_MS));
     }
 }
@@ -208,7 +221,7 @@ void pan_tilt_task(void *param)
 void message_create_task(void)
 {
     if (message_task_handle == NULL &&
-        xTaskCreate(message_task, "MESSAGE_TASK", MESSAGE_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &message_task_handle) != pdPASS)
+        xTaskCreate(fake_message_task, "MESSAGE_TASK", MESSAGE_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &message_task_handle) != pdPASS)
     {
         PRINTF("\r\nFailed to create message task\r\n");
         for (;;)
@@ -235,7 +248,7 @@ int main(void)
 {
     /* Initialize standard SDK demo application pins */
     BOARD_InitHardware();
-
+    xPositionQueue = xQueueCreate(1, sizeof(pan_tilt_position_t)); 
     message_create_task();
     pan_tilt_create_task();
 
