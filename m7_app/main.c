@@ -212,7 +212,11 @@ void pan_tilt_task(void *param)
             pan_tilt_mount_target_position(&mount, position.pan_position, position.tilt_position);
         }
 
-        pan_tilt_mount_move(&mount);
+        if (pan_tilt_mount_move(&mount) == PAN_TILT_MOVING_ERROR)
+        {
+            assert(false);
+        }
+    
         vTaskDelay(pdMS_TO_TICKS(PAN_TILT_STEP_DELAY_MS));
     }
 }
@@ -248,7 +252,12 @@ int main(void)
 {
     /* Initialize standard SDK demo application pins */
     BOARD_InitHardware();
-    xPositionQueue = xQueueCreate(1, sizeof(pan_tilt_position_t)); 
+    xPositionQueue = xQueueCreate(1, sizeof(pan_tilt_position_t));
+    if (xPositionQueue == NULL)
+    {
+        assert(false);
+    }
+
     message_create_task();
     pan_tilt_create_task();
 
