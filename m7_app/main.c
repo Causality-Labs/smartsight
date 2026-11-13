@@ -21,6 +21,7 @@
 #include "fsl_pwm.h"
 #include "pan_tilt_mount.h"
 #include "emulate_path.h"
+#include "smartsight_message.h"
 
 /*******************************************************************************
  * Definitions
@@ -30,9 +31,6 @@
 #ifndef LOCAL_EPT_ADDR
 #define LOCAL_EPT_ADDR (30)
 #endif
-
-/* Globals */
-static char app_buf[512]; /* Each RPMSG buffer can carry less than 512 payload */
 
 /*******************************************************************************
  * Prototypes
@@ -53,6 +51,13 @@ static volatile rpmsg_queue_handle my_queue        = NULL;
 #define MESSAGE_TASK_DELAY_MS 100U
 
 static QueueHandle_t xPositionQueue;
+static QueueHandle_t xCtrlQueue;
+
+typedef enum
+{
+    ENABLED_STATE = 1,
+    DISABLED_STATE
+} mount_state_t;
 
 void message_destroy_task(void)
 {
@@ -84,11 +89,9 @@ void message_destroy_task(void)
 void message_task(void *param)
 {
     volatile uint32_t remote_addr = 0U;
-    void *rx_buf;
+    ss_cmd_t ss_cmd;
     uint32_t len;
     int32_t result;
-    void *tx_buf;
-    uint32_t size;
 
     /* Print the initial banner */
     PRINTF("\r\nRPMSG String Echo FreeRTOS RTOS API Demo...\r\n");
@@ -112,40 +115,65 @@ void message_task(void *param)
     for (;;)
     {
         /* Get RPMsg rx buffer with message */
-        result =
-            rpmsg_queue_recv_nocopy(my_rpmsg, my_queue, (uint32_t *)&remote_addr, (char **)&rx_buf, &len, RL_BLOCK);
+        result = rpmsg_queue_recv(my_rpmsg,
+                                  my_queue,
+                                  (uint32_t *)&remote_addr, 
+                                  (char *)&ss_cmd,
+                                  sizeof(ss_cmd),
+                                  &len,
+                                  RL_BLOCK);
         if (result != 0)
         {
-            assert(false);
+            continue;
         }
 
-        /* Copy string from RPMsg rx buffer */
-        assert(len < sizeof(app_buf));
-        memcpy(app_buf, rx_buf, len);
-        app_buf[len] = 0; /* End string by '\0' */
-
-        if ((len == 2) && (app_buf[0] == 0xd) && (app_buf[1] == 0xa))
-            PRINTF("Get New Line From Master Side\r\n");
-        else
-            PRINTF("Get Message From Master Side : \"%s\" [len : %d]\r\n", app_buf, len);
-
-        /* Get tx buffer from RPMsg */
-        tx_buf = rpmsg_lite_alloc_tx_buffer(my_rpmsg, &size, RL_BLOCK);
-        assert(tx_buf);
-        /* Copy string to RPMsg tx buffer */
-        memcpy(tx_buf, app_buf, len);
-        /* Echo back received message with nocopy send */
-        result = rpmsg_lite_send_nocopy(my_rpmsg, my_ept, remote_addr, tx_buf, len);
-        if (result != 0)
+        switch (ss_cmd.header.opcode)
         {
-            assert(false);
+            case SS_OP_MOVE:
+            {
+                pan_tilt_position_t position_data;
+                position_data.pan_position  = ss_cmd.payload.position.pan_cdeg / 100.0f;
+                position_data.tilt_position  = ss_cmd.payload.position.tilt_cdeg / 100.0f;
+                xQueueOverwrite(xPositionQueue, &position_data);
+                break;
+            }
+            case SS_OP_CTRL:
+            {
+                if (ss_cmd.payload.ctrl.ctrl < SS_CTRL_ENABLE
+                    || ss_cmd.payload.ctrl.ctrl > SS_CTRL_HOME)
+                {
+                    PRINTF("\r\nInvalid CTRL payload 0x%02X\r\n", ss_cmd.payload.ctrl.ctrl);
+                    break;
+                }
+
+                if (xQueueSend(xCtrlQueue, &ss_cmd.payload.ctrl.ctrl, 0) != pdPASS)
+                {
+                    PRINTF("\r\nCtrl Queue is full message was dropped...\r\n");
+                }
+                break;
+            }
+            default:
+                break;
+
         }
-        /* Release held RPMsg rx buffer */
-        result = rpmsg_queue_nocopy_free(my_rpmsg, rx_buf);
-        if (result != 0)
-        {
-            assert(false);
-        }
+
+        // /* Get tx buffer from RPMsg */
+        // tx_buf = rpmsg_lite_alloc_tx_buffer(my_rpmsg, &size, RL_BLOCK);
+        // assert(tx_buf);
+        // /* Copy string to RPMsg tx buffer */
+        // memcpy(tx_buf, app_buf, len);
+        // /* Echo back received message with nocopy send */
+        // result = rpmsg_lite_send_nocopy(my_rpmsg, my_ept, remote_addr, tx_buf, len);
+        // if (result != 0)
+        // {
+        //     assert(false);
+        // }
+        // /* Release held RPMsg rx buffer */
+        // result = rpmsg_queue_nocopy_free(my_rpmsg, rx_buf);
+        // if (result != 0)
+        // {
+        //     assert(false);
+        // }
     }
 }
 
@@ -178,27 +206,84 @@ void pan_tilt_task(void *param)
 
     pan_tilt_mount_t mount = {0};
     pan_tilt_position_t position = {0};
+    uint8_t ctrl_cmd = 0;
+    mount_state_t mount_state = DISABLED_STATE;
 
     if (pan_tilt_mount_init(&mount, &pan_tilt_mount_config) != PAN_TILT_MOUNT_STATUS_OK)
     {
-        PRINTF("\r\nFailed to initialize Pan Tilt Mount..\r\n");
+        PRINTF("Failed to initialize Pan Tilt Mount\r\n");
         assert(false);
     }
-    vTaskDelay(pdMS_TO_TICKS(5000)); // Wait for Servo to Home.
 
-    while (1)
+    vTaskDelay(pdMS_TO_TICKS(2000)); // Wait for Servo to Home.
+
+    if (pan_tilt_mount_disable(&mount) != PAN_TILT_MOUNT_STATUS_OK)
     {
-        if (xQueueReceive(xPositionQueue, &position, 0) == pdPASS)
-        {
-            pan_tilt_mount_target_position(&mount, position.pan_position, position.tilt_position);
-        }
+        PRINTF("Failed to disable Pan Tilt Mount..\r\n");
+        assert(false);
+    }
 
-        if (pan_tilt_mount_move(&mount) == PAN_TILT_MOVING_ERROR)
+    for (;;)
+    {
+        switch (mount_state)
         {
-            assert(false);
+            case ENABLED_STATE:
+            {
+                if (xQueueReceive(xCtrlQueue, &ctrl_cmd, 0) == pdPASS)
+                {
+                    if (ctrl_cmd == SS_CTRL_DISABLE)
+                    {
+                        pan_tilt_mount_stop(&mount);
+                        pan_tilt_mount_disable(&mount);
+                        mount_state = DISABLED_STATE;
+                    }
+                    else if (ctrl_cmd == SS_CTRL_HOME)
+                    {
+                        pan_tilt_mount_home(&mount);
+                    }
+                }
+
+                else if (xQueueReceive(xPositionQueue, &position, 0) == pdPASS)
+                {
+                    pan_tilt_mount_target_position(&mount,
+                                                   position.pan_position,
+                                                    position.tilt_position);
+                }
+
+                if (mount_state == ENABLED_STATE)
+                    pan_tilt_mount_move(&mount);
+
+                vTaskDelay(pdMS_TO_TICKS(PAN_TILT_STEP_DELAY_MS));
+                break;
+            }
+
+            case DISABLED_STATE:
+            {
+                if (xQueueReceive(xCtrlQueue, &ctrl_cmd, 0) == pdPASS)
+                {
+                    if (ctrl_cmd == SS_CTRL_ENABLE)
+                    {
+                        pan_tilt_mount_enable(&mount);
+                        mount_state = ENABLED_STATE;
+                    }
+                    break;
+                }
+
+                if (xQueueReceive(xPositionQueue, &position, 0) == pdPASS)
+                {
+                    PRINTF("Rejected positonal command while disabled\r\n");
+                }
+
+                vTaskDelay(pdMS_TO_TICKS(PAN_TILT_STEP_DELAY_MS));
+                break;
+            }
+
+            default: /* Impossible to reach this state. */
+            {
+                vTaskDelay(pdMS_TO_TICKS(PAN_TILT_STEP_DELAY_MS));
+                break;
+            }
         }
-    
-        vTaskDelay(pdMS_TO_TICKS(PAN_TILT_STEP_DELAY_MS));
     }
 }
 
@@ -233,8 +318,15 @@ int main(void)
 {
     /* Initialize standard SDK demo application pins */
     BOARD_InitHardware();
+
     xPositionQueue = xQueueCreate(1, sizeof(pan_tilt_position_t));
     if (xPositionQueue == NULL)
+    {
+        assert(false);
+    }
+
+    xCtrlQueue = xQueueCreate(3, sizeof(uint8_t));
+    if (xCtrlQueue == NULL)
     {
         assert(false);
     }

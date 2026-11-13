@@ -164,6 +164,13 @@ pan_tilt_mount_status_t pan_tilt_mount_enable(pan_tilt_mount_t *mount)
     return PAN_TILT_MOUNT_STATUS_OK;
 }
 
+pan_tilt_mount_status_t pan_tilt_mount_stop(pan_tilt_mount_t *mount)
+{
+    if (mount == NULL)
+        return PAN_TILT_MOUNT_STATUS_ERROR;
+
+    return pan_tilt_mount_target_position(mount, mount->pan.angle_deg, mount->tilt.angle_deg);
+}
 pan_tilt_mount_status_t pan_tilt_mount_disable(pan_tilt_mount_t *mount)
 {
     if (mount == NULL)

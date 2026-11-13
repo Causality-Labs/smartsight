@@ -34,6 +34,7 @@ The example code.
 - C (C11), targeting a microcontroller: FreeRTOS or bare metal as fits the topic. Use real FreeRTOS / CMSIS API names where relevant; invent everything application-specific.
 - Should be plausible enough to compile given obvious declarations. Use `/* ... */` to elide boring parts.
 - Comments only where they mark a design decision.
+- **Formatting:** write code the way it would look in a real codebase. Every `if`, `else`, `for`, `while`, and `case` body goes on its own line(s) inside braces. No one-liners like `if (x) y = z;` or `case A: foo(); return B;`. One statement per line. Allman or K&R brace style, applied consistently. This applies to the junior version too.
 
 ### 5. Why
 Bullet list of the design decisions in the senior version and the reasoning behind each. Include:

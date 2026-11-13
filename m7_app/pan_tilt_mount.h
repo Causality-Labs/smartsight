@@ -55,6 +55,7 @@ pan_tilt_mount_status_t pan_tilt_mount_tilt_target(pan_tilt_mount_t *mount, floa
 bool pan_tilt_mount_pan_at_target(const pan_tilt_mount_t *mount);
 bool pan_tilt_mount_tilt_at_target(const pan_tilt_mount_t *mount);
 pan_tilt_move_status_t pan_tilt_mount_move(pan_tilt_mount_t *mount);
+pan_tilt_mount_status_t pan_tilt_mount_stop(pan_tilt_mount_t *mount);
 pan_tilt_mount_status_t pan_tilt_mount_home(pan_tilt_mount_t *mount);
 pan_tilt_mount_status_t pan_tilt_mount_enable(pan_tilt_mount_t *mount);
 pan_tilt_mount_status_t pan_tilt_mount_disable(pan_tilt_mount_t *mount);
