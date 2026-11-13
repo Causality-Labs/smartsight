@@ -105,7 +105,7 @@ void message_task(void *param)
      * before the nameservice_isr_cb is registered on the master side.
      */
     SDK_DelayAtLeastUs(1000000U, SDK_DEVICE_MAXIMUM_CPU_CLOCK_FREQUENCY);
-    (void)rpmsg_ns_announce(my_rpmsg, my_ept, RPMSG_LITE_NS_ANNOUNCE_STRING, RL_NS_CREATE);
+    (void)rpmsg_ns_announce(my_rpmsg, my_ept, "rpmsg-raw", RL_NS_CREATE);
 
     PRINTF("\r\nNameservice sent, ready for incoming messages...\r\n");
 
@@ -146,25 +146,6 @@ void message_task(void *param)
         {
             assert(false);
         }
-    }
-}
-
-void fake_message_task(void *param)
-{
-
-    PRINTF("\r\nFake Message Task up and running...\r\n");
-    TickType_t last_wake = xTaskGetTickCount();
-
-
-    for (;;)
-    {
-        pan_tilt_position_t tgt;
-        random_walk_generator(&tgt);
-
-        xQueueOverwrite(xPositionQueue, &tgt);
-
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(50));
-
     }
 }
 
@@ -225,7 +206,7 @@ void pan_tilt_task(void *param)
 void message_create_task(void)
 {
     if (message_task_handle == NULL &&
-        xTaskCreate(fake_message_task, "MESSAGE_TASK", MESSAGE_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &message_task_handle) != pdPASS)
+        xTaskCreate(message_task, "MESSAGE_TASK", MESSAGE_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &message_task_handle) != pdPASS)
     {
         PRINTF("\r\nFailed to create message task\r\n");
         for (;;)
