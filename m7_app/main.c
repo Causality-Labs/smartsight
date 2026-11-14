@@ -70,7 +70,6 @@ typedef struct
     uint16_t status;
 } telemetry_t;
 
-
 void message_destroy_task(void)
 {
     if (message_task_handle)
@@ -133,7 +132,22 @@ void message_task(void *param)
                                   sizeof(ss_cmd),
                                   &len,
                                   RL_BLOCK);
-        if (result != 0)
+        if (result != RL_SUCCESS)
+        {
+            continue;
+        }
+
+        if (len < sizeof(ss_header_t))
+        {
+            continue;
+        }
+
+        if (ss_cmd.header.version != SS_PROTOCOL_VERSION)
+        {
+            continue;
+        }
+
+        if (len !=  sizeof(ss_cmd_t))
         {
             continue;
         }
@@ -297,6 +311,9 @@ void telemetry_task(void *param)
 {
     telemetry_t telemetry;
     ss_tel_t ss_telemetry = {0};
+    ss_telemetry.header.version = SS_PROTOCOL_VERSION;
+    ss_telemetry.header.sequence = 0;
+    ss_telemetry.header.opcode = SS_OP_TELEMETRY;
 
     for (;;)
     {
@@ -307,22 +324,21 @@ void telemetry_task(void *param)
             continue;
         }
 
+        ss_telemetry.header.sequence++;
+
         ss_telemetry.timestamp_ms = telemetry.timestamp_ms;
         ss_telemetry.status = telemetry.status;
         ss_telemetry.pan_cdeg = telemetry.pan_cdeg;
         ss_telemetry.tilt_cdeg = telemetry.tilt_cdeg;
 
-        /* use rpmsg to send it to linux */
         if (remote_addr != 0)
         {
-            int32_t ret = rpmsg_lite_send(my_rpmsg,
+            (void)rpmsg_lite_send(my_rpmsg,
                                           my_ept,
                                           remote_addr,
                                           (char *)&ss_telemetry,
                                           sizeof(ss_telemetry),
                                           RL_DONT_BLOCK);
-
-            (void)ret;
         }
 
     }
