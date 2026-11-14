@@ -50,8 +50,8 @@ typedef struct
 {
     ss_header_t header;
     uint32_t timestamp_ms;
-    uint16_t pan_cdeg;
-    uint16_t tilt_cdeg;
+    int32_t pan_cdeg;
+    int32_t tilt_cdeg;
     uint16_t status;
     uint16_t reserved;
 } ss_tel_t;

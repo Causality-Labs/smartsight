@@ -28,23 +28,23 @@ typedef struct {
     pwm_channel_t channel;
     uint16_t pulse_min_us;
     uint16_t pulse_max_us;
-    float    min_angle_deg;
-    float max_angle_deg;
-    float    offset_deg;
+    int32_t    min_angle_cdeg;
+    int32_t max_angle_cdeg;
+    int32_t    offset_cdeg;
 } servo_config_t;
 
 
 typedef struct {
     servo_config_t config;
-    float angle_deg;
+    int32_t angle_cdeg;
     bool initialized;
     bool enabled;
 } servo_t;
 
 
-servo_status_t servo_init(servo_t *servo, const servo_config_t *config, float start_angle_deg);
-servo_status_t servo_set_position(servo_t *servo, float angle_deg);
-float          servo_get_position(const servo_t *servo);
+servo_status_t servo_init(servo_t *servo, const servo_config_t *config, int32_t start_angle_cdeg);
+servo_status_t servo_set_position(servo_t *servo, int32_t angle_cdeg);
+int32_t servo_get_position(const servo_t *servo);
 servo_status_t servo_enable(servo_t *servo);
 servo_status_t servo_disable(servo_t *servo);
 servo_status_t servo_deinit(servo_t *servo);

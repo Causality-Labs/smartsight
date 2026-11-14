@@ -7,7 +7,7 @@
 #define SERVO_PWM_CLOCK_HZ 1000000U  /* Counter after prescaler: 1 count = 1 us */
 #define SERVO_PERIOD_US    20000U    /* 20 ms frame = 50 Hz */
 
-#define SERVO_ANGLE_MAX_DEG 180.0f   /* Full mechanical travel the pulse range maps onto */
+#define SERVO_ANGLE_MAX_CDEG 18000   /* Full mechanical travel the pulse range maps onto */
 
 typedef struct
 {
@@ -33,7 +33,7 @@ static uint32_t servo_period_us_to_register(uint32_t period_us)
     return servo_us_to_counts(period_us) - 2U;
 }
 
-static float servo_clamp(float value, float min, float max)
+static int32_t servo_clamp(int32_t value, int32_t min, int32_t max)
 {
     if (value < min)
         return min;
@@ -44,13 +44,13 @@ static float servo_clamp(float value, float min, float max)
     return value;
 }
 
-static uint32_t servo_angle_to_pulse_us(const servo_config_t *config, float angle_deg)
+static uint32_t servo_angle_to_pulse_us(const servo_config_t *config, int32_t angle_cdeg)
 {
     return config->pulse_min_us +
-           (uint32_t)((angle_deg / SERVO_ANGLE_MAX_DEG) * (config->pulse_max_us - config->pulse_min_us) + 0.5f);
+           (uint32_t)((angle_cdeg * (config->pulse_max_us - config->pulse_min_us) + (SERVO_ANGLE_MAX_CDEG / 2)))/ SERVO_ANGLE_MAX_CDEG;
 }
 
-servo_status_t servo_init(servo_t *servo, const servo_config_t *config, float start_angle_deg)
+servo_status_t servo_init(servo_t *servo, const servo_config_t *config, int32_t start_angle_cdeg)
 {
     pwm_config_t pwm_config = {0};
 
@@ -63,10 +63,10 @@ servo_status_t servo_init(servo_t *servo, const servo_config_t *config, float st
     if (config->pulse_min_us >= config->pulse_max_us)
         return SERVO_STATUS_ERROR;
 
-    if (config->min_angle_deg < 0.0f || config->max_angle_deg > SERVO_ANGLE_MAX_DEG)
+    if (config->min_angle_cdeg < 0 || config->max_angle_cdeg > SERVO_ANGLE_MAX_CDEG)
         return SERVO_STATUS_ERROR;
 
-    if (config->min_angle_deg >= config->max_angle_deg)
+    if (config->min_angle_cdeg >= config->max_angle_cdeg)
         return SERVO_STATUS_ERROR;
 
     servo_pwm_channel_t *ch = &PWM_CHANNELS[config->channel];
@@ -78,7 +78,7 @@ servo_status_t servo_init(servo_t *servo, const servo_config_t *config, float st
 
     /* Keep a copy so the caller's config can go out of scope */
     servo->config      = *config;
-    servo->angle_deg   = 0.0f;
+    servo->angle_cdeg   = 0;
     servo->initialized = false;
     servo->enabled     = false;
 
@@ -100,37 +100,37 @@ servo_status_t servo_init(servo_t *servo, const servo_config_t *config, float st
 
     /* Queue the start position BEFORE starting, so the very first pulse is correct */
     servo->enabled        = true;
-    servo_status_t status = servo_set_position(servo, start_angle_deg);
+    servo_status_t status = servo_set_position(servo, start_angle_cdeg);
     PWM_StartTimer(ch->base);
 
     return status;
 }
 
-servo_status_t servo_set_position(servo_t *servo, float angle_deg)
+servo_status_t servo_set_position(servo_t *servo, int32_t angle_cdeg)
 {
     if (servo == NULL || !servo->enabled)
         return SERVO_STATUS_ERROR;
 
-    angle_deg = servo_clamp(angle_deg, servo->config.min_angle_deg, servo->config.max_angle_deg);
+    angle_cdeg = servo_clamp(angle_cdeg, servo->config.min_angle_cdeg, servo->config.max_angle_cdeg);
 
-    float physical_deg = servo_clamp(angle_deg + servo->config.offset_deg, 0.0f, SERVO_ANGLE_MAX_DEG);
+    int32_t physical_cdeg = servo_clamp(angle_cdeg + servo->config.offset_cdeg, 0, SERVO_ANGLE_MAX_CDEG);
 
-    uint32_t pulse_us = servo_angle_to_pulse_us(&servo->config, physical_deg);
+    uint32_t pulse_us = servo_angle_to_pulse_us(&servo->config, physical_cdeg);
     servo_pwm_channel_t *ch = &PWM_CHANNELS[servo->config.channel];
 
 
     PWM_SetSampleValue(ch->base, servo_us_to_counts(pulse_us));
-    servo->angle_deg = angle_deg;
+    servo->angle_cdeg = angle_cdeg;
 
     return SERVO_STATUS_OK;
 }
 
-float servo_get_position(const servo_t *servo)
+int32_t servo_get_position(const servo_t *servo)
 {
     if (servo == NULL)
-        return 0.0f;
+        return 0;
 
-    return servo->angle_deg;
+    return servo->angle_cdeg;
 }
 
 servo_status_t servo_enable(servo_t *servo)
@@ -144,7 +144,7 @@ servo_status_t servo_enable(servo_t *servo)
     servo_pwm_channel_t *ch = &PWM_CHANNELS[servo->config.channel];
 
     servo->enabled        = true;
-    servo_status_t status = servo_set_position(servo, servo->angle_deg);
+    servo_status_t status = servo_set_position(servo, servo->angle_cdeg);
     PWM_StartTimer(ch->base);
 
     return status;

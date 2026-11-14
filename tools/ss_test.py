@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import select
 import struct
 import sys
+import threading
 import time
 
 DEVICE = "/dev/rpmsg0"
@@ -10,6 +12,14 @@ VERSION = 1
 
 OP_MOVE = 0x00
 OP_CTRL = 0x01
+OP_TELEMETRY = 0x80
+
+TEL_FMT = "<BBHIHHHH"
+TEL_SIZE = struct.calcsize(TEL_FMT)
+RPMSG_MAX_PAYLOAD = 496
+
+STATUS_ENABLED = 1 << 0
+STATUS_SERVO_ERROR = 1 << 1
 
 CTRL_CODES = {
     "enable": 0x01,
@@ -42,6 +52,66 @@ class Link:
 
     def close(self):
         os.close(self.fd)
+
+
+class TelemetryMonitor:
+    def __init__(self, fd, every):
+        self.fd = fd
+        self.every = max(1, every)
+        self.count = 0
+        self.gaps = 0
+        self.bad = 0
+        self.last_seq = None
+        self.last_t = None
+        self.last_status = None
+
+    def handle(self, buf):
+        if len(buf) != TEL_SIZE:
+            self.bad += 1
+            print(f"  <- bad length {len(buf)}  [{buf.hex(' ')}]")
+            return
+
+        version, op, seq, t_ms, pan, tilt, status, _ = struct.unpack(TEL_FMT, buf)
+
+        if version != VERSION or op != OP_TELEMETRY:
+            self.bad += 1
+            print(f"  <- unexpected version={version} op=0x{op:02X}  [{buf.hex(' ')}]")
+            return
+
+        if self.last_seq is not None and ((seq - self.last_seq) & 0xFFFF) != 1:
+            self.gaps += 1
+            print(f"  <- GAP seq {self.last_seq} -> {seq}")
+
+        dt = 0
+        if self.last_t is not None:
+            dt = (t_ms - self.last_t) & 0xFFFFFFFF
+
+        status_changed = status != self.last_status
+
+        self.count += 1
+        self.last_seq = seq
+        self.last_t = t_ms
+        self.last_status = status
+
+        if self.count == 1 or status_changed or self.count % self.every == 0:
+            state = "ENABLED " if status & STATUS_ENABLED else "DISABLED"
+            err = " SERVO_ERROR" if status & STATUS_SERVO_ERROR else ""
+            print(f"  <- TEL seq={seq:5d} t={t_ms:9d}ms dt={dt:3d}ms "
+                  f"pan={pan / 100:6.2f} tilt={tilt / 100:6.2f} {state}{err}")
+
+    def run(self, stop):
+        while not stop.is_set():
+            ready, _, _ = select.select([self.fd], [], [], 0.2)
+            if ready:
+                try:
+                    buf = os.read(self.fd, RPMSG_MAX_PAYLOAD)
+                except OSError as e:
+                    print(f"  <- read error: {e}")
+                    return
+                self.handle(buf)
+
+    def summary(self):
+        print(f"\ntelemetry: {self.count} messages, {self.gaps} gaps, {self.bad} bad")
 
 
 def step(title, expected, auto):
@@ -112,6 +182,11 @@ def main():
 
     p_seq = sub.add_parser("seq", help="run the full test sequence")
     p_seq.add_argument("--auto", action="store_true", help="don't pause between steps")
+    p_seq.add_argument("--listen", action="store_true", help="print telemetry during the sequence")
+    p_seq.add_argument("--every", type=int, default=10, help="print every Nth telemetry message")
+
+    p_listen = sub.add_parser("listen", help="decode telemetry until Ctrl-C")
+    p_listen.add_argument("--every", type=int, default=10, help="print every Nth telemetry message")
 
     args = parser.parse_args()
 
@@ -119,6 +194,15 @@ def main():
         link = Link(args.device)
     except OSError as e:
         sys.exit(f"cannot open {args.device}: {e}")
+
+    monitor = None
+    stop = threading.Event()
+    reader = None
+
+    if args.cmd == "listen" or (args.cmd == "seq" and args.listen):
+        monitor = TelemetryMonitor(link.fd, args.every)
+        reader = threading.Thread(target=monitor.run, args=(stop,), daemon=True)
+        reader.start()
 
     try:
         if args.cmd == "move":
@@ -130,7 +214,21 @@ def main():
             link.ctrl(code)
         elif args.cmd == "seq":
             run_sequence(link, args.auto)
+            if monitor:
+                time.sleep(1.0)
+        elif args.cmd == "listen":
+            print("  (sending an invalid CTRL as a ping so the M7 learns our address)")
+            link.ctrl(0x00)
+            while True:
+                time.sleep(1.0)
+    except KeyboardInterrupt:
+        pass
     finally:
+        stop.set()
+        if reader:
+            reader.join()
+        if monitor:
+            monitor.summary()
         link.close()
 
 

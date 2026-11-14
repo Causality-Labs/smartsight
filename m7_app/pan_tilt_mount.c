@@ -2,27 +2,27 @@
 #include <stddef.h>
 #include "pan_tilt_mount.h"
 
-static float clamp(float current_deg, float min_deg, float max_deg)
+static int32_t clamp(int32_t current_cdeg, int32_t min_cdeg, int32_t max_cdeg)
 {
-    if (current_deg < min_deg)
-        return min_deg;
+    if (current_cdeg < min_cdeg)
+        return min_cdeg;
 
-    if (current_deg > max_deg)
-        return max_deg;
+    if (current_cdeg > max_cdeg)
+        return max_cdeg;
 
-    return current_deg;
+    return current_cdeg;
 }
 
-static float pan_tilt_mount_limit_step(float current_deg, float target_deg, float max_step_deg)
+static int32_t pan_tilt_mount_limit_step(int32_t current_cdeg, int32_t target_cdeg, int32_t max_step_cdeg)
 {
-    float step = target_deg - current_deg;
+    int32_t step = target_cdeg - current_cdeg;
 
-    if (step > max_step_deg)
-        step = max_step_deg;
-    else if (step < -max_step_deg)
-        step = -max_step_deg;
+    if (step > max_step_cdeg)
+        step = max_step_cdeg;
+    else if (step < -max_step_cdeg)
+        step = -max_step_cdeg;
 
-    return current_deg + step;
+    return current_cdeg + step;
 }
 
 pan_tilt_mount_status_t pan_tilt_mount_init(pan_tilt_mount_t *mount,
@@ -31,62 +31,62 @@ pan_tilt_mount_status_t pan_tilt_mount_init(pan_tilt_mount_t *mount,
     if (mount == NULL || config == NULL)
         return PAN_TILT_MOUNT_STATUS_ERROR;
 
-    if (config->max_pan_step_deg <= 0.0f || config->max_tilt_step_deg <= 0.0f)
+    if (config->max_pan_step_cdeg <= 0 || config->max_tilt_step_cdeg <= 0)
         return PAN_TILT_MOUNT_STATUS_ERROR;
 
-    if (servo_init(&mount->pan, &config->pan, config->pan_home_deg) != SERVO_STATUS_OK)
+    if (servo_init(&mount->pan, &config->pan, config->pan_home_cdeg) != SERVO_STATUS_OK)
         return PAN_TILT_MOUNT_STATUS_ERROR;
 
-    if (servo_init(&mount->tilt, &config->tilt, config->tilt_home_deg) != SERVO_STATUS_OK)
+    if (servo_init(&mount->tilt, &config->tilt, config->tilt_home_cdeg) != SERVO_STATUS_OK)
     {
         servo_deinit(&mount->pan);
         return PAN_TILT_MOUNT_STATUS_ERROR;
     }
 
-    mount->pan_home_deg  = config->pan_home_deg;
-    mount->tilt_home_deg = config->tilt_home_deg;
-    mount->max_pan_step_deg  = config->max_pan_step_deg;
-    mount->max_tilt_step_deg  = config->max_tilt_step_deg;
+    mount->pan_home_cdeg  = config->pan_home_cdeg;
+    mount->tilt_home_cdeg = config->tilt_home_cdeg;
+    mount->max_pan_step_cdeg  = config->max_pan_step_cdeg;
+    mount->max_tilt_step_cdeg  = config->max_tilt_step_cdeg;
 
-    mount->pan_target_deg  = servo_get_position(&mount->pan);
-    mount->tilt_target_deg = servo_get_position(&mount->tilt);
+    mount->pan_target_cdeg  = servo_get_position(&mount->pan);
+    mount->tilt_target_cdeg = servo_get_position(&mount->tilt);
 
     return PAN_TILT_MOUNT_STATUS_OK;
 }
 
 pan_tilt_mount_status_t pan_tilt_mount_target_position(pan_tilt_mount_t *mount,
-                                                       float pan_position,
-                                                       float tilt_position)
+                                                       int32_t pan_position,
+                                                       int32_t tilt_position)
 {
     if (mount == NULL)
         return PAN_TILT_MOUNT_STATUS_ERROR;
 
-    mount->pan_target_deg  = clamp(pan_position, mount->pan.config.min_angle_deg,
-                                   mount->pan.config.max_angle_deg);
-    mount->tilt_target_deg = clamp(tilt_position, mount->tilt.config.min_angle_deg,
-                                   mount->tilt.config.max_angle_deg);
+    mount->pan_target_cdeg  = clamp(pan_position, mount->pan.config.min_angle_cdeg,
+                                   mount->pan.config.max_angle_cdeg);
+    mount->tilt_target_cdeg = clamp(tilt_position, mount->tilt.config.min_angle_cdeg,
+                                   mount->tilt.config.max_angle_cdeg);
 
     return PAN_TILT_MOUNT_STATUS_OK;
 }
 
-pan_tilt_mount_status_t pan_tilt_mount_pan_target(pan_tilt_mount_t *mount, float pan_deg)
+pan_tilt_mount_status_t pan_tilt_mount_pan_target(pan_tilt_mount_t *mount, int32_t pan_cdeg)
 {
     if (mount == NULL)
         return PAN_TILT_MOUNT_STATUS_ERROR;
 
-    mount->pan_target_deg = clamp(pan_deg, mount->pan.config.min_angle_deg,
-                                  mount->pan.config.max_angle_deg);
+    mount->pan_target_cdeg = clamp(pan_cdeg, mount->pan.config.min_angle_cdeg,
+                                  mount->pan.config.max_angle_cdeg);
 
     return PAN_TILT_MOUNT_STATUS_OK;
 }
 
-pan_tilt_mount_status_t pan_tilt_mount_tilt_target(pan_tilt_mount_t *mount, float tilt_deg)
+pan_tilt_mount_status_t pan_tilt_mount_tilt_target(pan_tilt_mount_t *mount, int32_t tilt_cdeg)
 {
     if (mount == NULL)
         return PAN_TILT_MOUNT_STATUS_ERROR;
 
-    mount->tilt_target_deg = clamp(tilt_deg, mount->tilt.config.min_angle_deg,
-                                   mount->tilt.config.max_angle_deg);
+    mount->tilt_target_cdeg = clamp(tilt_cdeg, mount->tilt.config.min_angle_cdeg,
+                                   mount->tilt.config.max_angle_cdeg);
 
     return PAN_TILT_MOUNT_STATUS_OK;
 }
@@ -96,7 +96,7 @@ bool pan_tilt_mount_pan_at_target(const pan_tilt_mount_t *mount)
     if (mount == NULL)
         return false;
 
-    return mount->pan.angle_deg == mount->pan_target_deg;
+    return mount->pan.angle_cdeg == mount->pan_target_cdeg;
 }
 
 bool pan_tilt_mount_tilt_at_target(const pan_tilt_mount_t *mount)
@@ -104,7 +104,7 @@ bool pan_tilt_mount_tilt_at_target(const pan_tilt_mount_t *mount)
     if (mount == NULL)
         return false;
 
-    return mount->tilt.angle_deg == mount->tilt_target_deg;
+    return mount->tilt.angle_cdeg == mount->tilt_target_cdeg;
 }
 
 pan_tilt_move_status_t pan_tilt_mount_move(pan_tilt_mount_t *mount)
@@ -115,13 +115,13 @@ pan_tilt_move_status_t pan_tilt_mount_move(pan_tilt_mount_t *mount)
     bool pan_reached = false;
     bool tilt_reached = false;
 
-    float pan_next  = pan_tilt_mount_limit_step(mount->pan.angle_deg, 
-                                                mount->pan_target_deg,
-                                                mount->max_pan_step_deg);
+    int32_t pan_next  = pan_tilt_mount_limit_step(mount->pan.angle_cdeg, 
+                                                mount->pan_target_cdeg,
+                                                mount->max_pan_step_cdeg);
 
-    float tilt_next = pan_tilt_mount_limit_step(mount->tilt.angle_deg,
-                                                mount->tilt_target_deg,
-                                                mount->max_tilt_step_deg);
+    int32_t tilt_next = pan_tilt_mount_limit_step(mount->tilt.angle_cdeg,
+                                                mount->tilt_target_cdeg,
+                                                mount->max_tilt_step_cdeg);
 
     if (servo_set_position(&mount->pan, pan_next) != SERVO_STATUS_OK)
         return PAN_TILT_MOVING_ERROR;
@@ -129,10 +129,10 @@ pan_tilt_move_status_t pan_tilt_mount_move(pan_tilt_mount_t *mount)
     if (servo_set_position(&mount->tilt, tilt_next) != SERVO_STATUS_OK)
         return PAN_TILT_MOVING_ERROR;
 
-    if (mount->pan.angle_deg  == mount->pan_target_deg)
+    if (mount->pan.angle_cdeg  == mount->pan_target_cdeg)
         pan_reached = true;
 
-    if (mount->tilt.angle_deg  == mount->tilt_target_deg)
+    if (mount->tilt.angle_cdeg  == mount->tilt_target_cdeg)
         tilt_reached = true;
 
     if (pan_reached && tilt_reached)
@@ -146,7 +146,7 @@ pan_tilt_mount_status_t pan_tilt_mount_home(pan_tilt_mount_t *mount)
     if (mount == NULL)
         return PAN_TILT_MOUNT_STATUS_ERROR;
 
-    return pan_tilt_mount_target_position(mount, mount->pan_home_deg, mount->tilt_home_deg);
+    return pan_tilt_mount_target_position(mount, mount->pan_home_cdeg, mount->tilt_home_cdeg);
 }
 
 
@@ -169,8 +169,20 @@ pan_tilt_mount_status_t pan_tilt_mount_stop(pan_tilt_mount_t *mount)
     if (mount == NULL)
         return PAN_TILT_MOUNT_STATUS_ERROR;
 
-    return pan_tilt_mount_target_position(mount, mount->pan.angle_deg, mount->tilt.angle_deg);
+    return pan_tilt_mount_target_position(mount, mount->pan.angle_cdeg, mount->tilt.angle_cdeg);
 }
+
+pan_tilt_mount_status_t pan_tilt_mount_get_curr_pos(pan_tilt_mount_t *mount, int32_t *pan_pos, int32_t *tilt_pos)
+{
+    if (mount == NULL)
+        return PAN_TILT_MOUNT_STATUS_ERROR;
+    
+    *pan_pos = mount->pan.angle_cdeg;
+    *tilt_pos = mount->tilt.angle_cdeg;
+
+    return PAN_TILT_MOUNT_STATUS_OK;
+}
+
 pan_tilt_mount_status_t pan_tilt_mount_disable(pan_tilt_mount_t *mount)
 {
     if (mount == NULL)

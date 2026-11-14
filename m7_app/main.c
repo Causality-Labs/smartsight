@@ -20,7 +20,6 @@
 #include "app.h"
 #include "fsl_pwm.h"
 #include "pan_tilt_mount.h"
-#include "emulate_path.h"
 #include "smartsight_message.h"
 
 /*******************************************************************************
@@ -28,6 +27,7 @@
  ******************************************************************************/
 #define MESSAGE_TASK_STACK_SIZE (256)
 #define PAN_TILT_TASK_STACK_SIZE (1024)
+#define TELEMETRY_STACK_SIZE (1024)
 #ifndef LOCAL_EPT_ADDR
 #define LOCAL_EPT_ADDR (30)
 #endif
@@ -41,23 +41,35 @@
  ******************************************************************************/
 static TaskHandle_t message_task_handle = NULL;
 static TaskHandle_t pan_tilt_task_handle = NULL;
+static TaskHandle_t telemetry_task_handle = NULL;
 
 static struct rpmsg_lite_instance *volatile my_rpmsg = NULL;
 
 static struct rpmsg_lite_endpoint *volatile my_ept = NULL;
 static volatile rpmsg_queue_handle my_queue        = NULL;
+static volatile uint32_t remote_addr = 0U;
 
 #define PAN_TILT_STEP_DELAY_MS 20U
 #define MESSAGE_TASK_DELAY_MS 100U
 
 static QueueHandle_t xPositionQueue;
 static QueueHandle_t xCtrlQueue;
+static QueueHandle_t xTelQueue;
 
 typedef enum
 {
     ENABLED_STATE = 1,
     DISABLED_STATE
 } mount_state_t;
+
+typedef struct 
+{
+    int32_t pan_cdeg;
+    int32_t tilt_cdeg;
+    uint32_t timestamp_ms;
+    uint16_t status;
+} telemetry_t;
+
 
 void message_destroy_task(void)
 {
@@ -88,7 +100,6 @@ void message_destroy_task(void)
 
 void message_task(void *param)
 {
-    volatile uint32_t remote_addr = 0U;
     ss_cmd_t ss_cmd;
     uint32_t len;
     int32_t result;
@@ -132,8 +143,8 @@ void message_task(void *param)
             case SS_OP_MOVE:
             {
                 pan_tilt_position_t position_data;
-                position_data.pan_position  = ss_cmd.payload.position.pan_cdeg / 100.0f;
-                position_data.tilt_position  = ss_cmd.payload.position.tilt_cdeg / 100.0f;
+                position_data.pan_position_cdeg  = ss_cmd.payload.position.pan_cdeg;
+                position_data.tilt_position_cdeg  = ss_cmd.payload.position.tilt_cdeg;
                 xQueueOverwrite(xPositionQueue, &position_data);
                 break;
             }
@@ -156,24 +167,6 @@ void message_task(void *param)
                 break;
 
         }
-
-        // /* Get tx buffer from RPMsg */
-        // tx_buf = rpmsg_lite_alloc_tx_buffer(my_rpmsg, &size, RL_BLOCK);
-        // assert(tx_buf);
-        // /* Copy string to RPMsg tx buffer */
-        // memcpy(tx_buf, app_buf, len);
-        // /* Echo back received message with nocopy send */
-        // result = rpmsg_lite_send_nocopy(my_rpmsg, my_ept, remote_addr, tx_buf, len);
-        // if (result != 0)
-        // {
-        //     assert(false);
-        // }
-        // /* Release held RPMsg rx buffer */
-        // result = rpmsg_queue_nocopy_free(my_rpmsg, rx_buf);
-        // if (result != 0)
-        // {
-        //     assert(false);
-        // }
     }
 }
 
@@ -186,28 +179,29 @@ void pan_tilt_task(void *param)
             .channel       = PWM_CHANNEL_4,
             .pulse_min_us  = 500U,
             .pulse_max_us  = 2400U,
-            .min_angle_deg = 0.0f,
-            .max_angle_deg = 180.0f,
-            .offset_deg    = 0.0f,
+            .min_angle_cdeg = 0,
+            .max_angle_cdeg = 18000,
+            .offset_cdeg    = 0,
         },
         .tilt = {
             .channel       = PWM_CHANNEL_1,
             .pulse_min_us  = 500U,
             .pulse_max_us  = 2400U,
-            .min_angle_deg = 150.0f,
-            .max_angle_deg = 180.0f,
-            .offset_deg    = 0.0f,
+            .min_angle_cdeg = 15000,
+            .max_angle_cdeg = 18000,
+            .offset_cdeg    = 0,
         },
-        .pan_home_deg  = 90.0f,
-        .tilt_home_deg = 165.0f,
-        .max_pan_step_deg  = 1.0f,
-        .max_tilt_step_deg  = 1.0f,
+        .pan_home_cdeg  = 9000,
+        .tilt_home_cdeg = 16500,
+        .max_pan_step_cdeg  = 100,
+        .max_tilt_step_cdeg  = 100,
     };
 
     pan_tilt_mount_t mount = {0};
     pan_tilt_position_t position = {0};
     uint8_t ctrl_cmd = 0;
     mount_state_t mount_state = DISABLED_STATE;
+    telemetry_t telemetry = {0};
 
     if (pan_tilt_mount_init(&mount, &pan_tilt_mount_config) != PAN_TILT_MOUNT_STATUS_OK)
     {
@@ -246,14 +240,13 @@ void pan_tilt_task(void *param)
                 else if (xQueueReceive(xPositionQueue, &position, 0) == pdPASS)
                 {
                     pan_tilt_mount_target_position(&mount,
-                                                   position.pan_position,
-                                                    position.tilt_position);
+                                                   position.pan_position_cdeg,
+                                                    position.tilt_position_cdeg);
                 }
 
                 if (mount_state == ENABLED_STATE)
                     pan_tilt_mount_move(&mount);
 
-                vTaskDelay(pdMS_TO_TICKS(PAN_TILT_STEP_DELAY_MS));
                 break;
             }
 
@@ -273,41 +266,65 @@ void pan_tilt_task(void *param)
                 {
                     PRINTF("Rejected positonal command while disabled\r\n");
                 }
-
-                vTaskDelay(pdMS_TO_TICKS(PAN_TILT_STEP_DELAY_MS));
                 break;
             }
 
             default: /* Impossible to reach this state. */
             {
-                vTaskDelay(pdMS_TO_TICKS(PAN_TILT_STEP_DELAY_MS));
                 break;
             }
         }
+
+
+        pan_tilt_mount_get_curr_pos(&mount, &telemetry.pan_cdeg, &telemetry.tilt_cdeg);
+        telemetry.timestamp_ms = pdTICKS_TO_MS(xTaskGetTickCount());
+
+        if (mount_state == ENABLED_STATE)
+            telemetry.status |= SS_STATUS_ENABLED;
+        else
+            telemetry.status &= ~SS_STATUS_ENABLED;
+
+        xQueueOverwrite(xTelQueue, &telemetry);
+        xTaskNotifyGive(telemetry_task_handle);
+
+        vTaskDelay(pdMS_TO_TICKS(PAN_TILT_STEP_DELAY_MS));
+
+
     }
 }
 
-
-void message_create_task(void)
+void telemetry_task(void *param)
 {
-    if (message_task_handle == NULL &&
-        xTaskCreate(message_task, "MESSAGE_TASK", MESSAGE_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1, &message_task_handle) != pdPASS)
-    {
-        PRINTF("\r\nFailed to create message task\r\n");
-        for (;;)
-            ;
-    }
-}
+    telemetry_t telemetry;
+    ss_tel_t ss_telemetry = {0};
 
-void pan_tilt_create_task(void)
-{
-    if (pan_tilt_task_handle == NULL &&
-        xTaskCreate(pan_tilt_task, "PAN_TILT_TASK", PAN_TILT_TASK_STACK_SIZE, NULL, tskIDLE_PRIORITY + 1,
-                    &pan_tilt_task_handle) != pdPASS)
+    for (;;)
     {
-        PRINTF("\r\nFailed to create pan tilt task\r\n");
-        for (;;)
-            ;
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        if (xQueuePeek(xTelQueue, &telemetry, 0) != pdPASS)
+        {
+            continue;
+        }
+
+        ss_telemetry.timestamp_ms = telemetry.timestamp_ms;
+        ss_telemetry.status = telemetry.status;
+        ss_telemetry.pan_cdeg = telemetry.pan_cdeg;
+        ss_telemetry.tilt_cdeg = telemetry.tilt_cdeg;
+
+        /* use rpmsg to send it to linux */
+        if (remote_addr != 0)
+        {
+            int32_t ret = rpmsg_lite_send(my_rpmsg,
+                                          my_ept,
+                                          remote_addr,
+                                          (char *)&ss_telemetry,
+                                          sizeof(ss_telemetry),
+                                          RL_DONT_BLOCK);
+
+            (void)ret;
+        }
+
     }
 }
 
@@ -331,8 +348,42 @@ int main(void)
         assert(false);
     }
 
-    message_create_task();
-    pan_tilt_create_task();
+    xTelQueue = xQueueCreate(1, sizeof(telemetry_t));
+    if (xTelQueue == NULL)
+    {
+        assert(false);
+    }
+
+    UBaseType_t msg_task_priority = tskIDLE_PRIORITY + 2;
+    UBaseType_t pan_tilt_task_priority = tskIDLE_PRIORITY + 3;
+    UBaseType_t telemetry_task_priority = tskIDLE_PRIORITY + 1;
+
+    if (xTaskCreate(message_task, "MESSAGE_TASK",
+                    MESSAGE_TASK_STACK_SIZE, NULL,
+                    msg_task_priority, &message_task_handle) != pdPASS)
+    {
+        PRINTF("\r\nFailed to create message task\r\n");
+        for (;;)
+            ;
+    }
+
+    if (xTaskCreate(pan_tilt_task, "PAN_TILT_TASK",
+                    PAN_TILT_TASK_STACK_SIZE, NULL,
+                    pan_tilt_task_priority, &pan_tilt_task_handle) != pdPASS)
+    {
+        PRINTF("\r\nFailed to create pan tilt task\r\n");
+        for (;;)
+            ;
+    }
+
+    if (xTaskCreate(telemetry_task, "TELEMETRY_TASK",
+                    TELEMETRY_STACK_SIZE, NULL,
+                    telemetry_task_priority, &telemetry_task_handle) != pdPASS)
+    {
+        PRINTF("\r\nFailed to create telemetry task\r\n");
+        for (;;)
+            ;
+    }
 
     vTaskStartScheduler();
 
