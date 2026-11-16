@@ -19,16 +19,16 @@ CDEG_PER_DEG = 100
 SEQ_MASK = 0xFFFF
 TIMESTAMP_MASK = 0xFFFFFFFF
 
-MOVE_FMT = "<BBHHH"
-CTRL_FMT = "<BBHBBH"
+MOVE_FMT = "<BBHii"
+CTRL_FMT = "<BBHBBHI"
 TELEMETRY_FMT = "<BBHIiiHH"
 
 MOVE_SIZE = struct.calcsize(MOVE_FMT)
 CTRL_SIZE = struct.calcsize(CTRL_FMT)
 TELEMETRY_SIZE = struct.calcsize(TELEMETRY_FMT)
 
-assert MOVE_SIZE == 8
-assert CTRL_SIZE == 8
+assert MOVE_SIZE == 12
+assert CTRL_SIZE == 12
 assert TELEMETRY_SIZE == 20
 
 
@@ -78,6 +78,7 @@ def pack_ctrl(seq, code):
             OP_CTRL,
             seq & SEQ_MASK,
             code,
+            0,
             0,
             0,
         )

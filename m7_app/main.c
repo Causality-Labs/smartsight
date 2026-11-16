@@ -25,12 +25,10 @@
 /*******************************************************************************
  * Definitions
  ******************************************************************************/
-#define MESSAGE_TASK_STACK_SIZE (256)
-#define PAN_TILT_TASK_STACK_SIZE (1024)
-#define TELEMETRY_STACK_SIZE (1024)
-#ifndef LOCAL_EPT_ADDR
-#define LOCAL_EPT_ADDR (30)
-#endif
+#define MESSAGE_TASK_STACK_SIZE (512)
+#define PAN_TILT_TASK_STACK_SIZE (512)
+#define TELEMETRY_TASK_STACK_SIZE (512)
+#define SMARTSIGHT_EPT_ADDR (30)
 
 /*******************************************************************************
  * Prototypes
@@ -43,10 +41,10 @@ static TaskHandle_t message_task_handle = NULL;
 static TaskHandle_t pan_tilt_task_handle = NULL;
 static TaskHandle_t telemetry_task_handle = NULL;
 
-static struct rpmsg_lite_instance *volatile my_rpmsg = NULL;
+static struct rpmsg_lite_instance *volatile smartsight_rpmsg = NULL;
+static struct rpmsg_lite_endpoint *volatile smartsight_ept = NULL;
 
-static struct rpmsg_lite_endpoint *volatile my_ept = NULL;
-static volatile rpmsg_queue_handle my_queue        = NULL;
+static volatile rpmsg_queue_handle my_queue = NULL;
 static volatile uint32_t remote_addr = 0U;
 
 #define PAN_TILT_STEP_DELAY_MS 20U
@@ -70,33 +68,6 @@ typedef struct
     uint16_t status;
 } telemetry_t;
 
-void message_destroy_task(void)
-{
-    if (message_task_handle)
-    {
-        vTaskDelete(message_task_handle);
-        message_task_handle = NULL;
-    }
-
-    if (my_ept)
-    {
-        rpmsg_lite_destroy_ept(my_rpmsg, my_ept);
-        my_ept = NULL;
-    }
-
-    if (my_queue)
-    {
-        rpmsg_queue_destroy(my_rpmsg, my_queue);
-        my_queue = NULL;
-    }
-
-    if (my_rpmsg)
-    {
-        rpmsg_lite_deinit(my_rpmsg);
-        my_rpmsg = NULL;
-    }
-}
-
 void message_task(void *param)
 {
     ss_cmd_t ss_cmd;
@@ -106,26 +77,27 @@ void message_task(void *param)
     /* Print the initial banner */
     PRINTF("\r\nRPMSG String Echo FreeRTOS RTOS API Demo...\r\n");
 
-    my_rpmsg = rpmsg_lite_remote_init((void *)RPMSG_LITE_SHMEM_BASE, RPMSG_LITE_LINK_ID, RL_NO_FLAGS);
+    smartsight_rpmsg = rpmsg_lite_remote_init((void *)RPMSG_LITE_SHMEM_BASE, RPMSG_LITE_LINK_ID, RL_NO_FLAGS);
 
-    rpmsg_lite_wait_for_link_up(my_rpmsg, RL_BLOCK);
+    rpmsg_lite_wait_for_link_up(smartsight_rpmsg, RL_BLOCK);
 
-    my_queue = rpmsg_queue_create(my_rpmsg);
-    my_ept   = rpmsg_lite_create_ept(my_rpmsg, LOCAL_EPT_ADDR, rpmsg_queue_rx_cb, my_queue);
+    my_queue = rpmsg_queue_create(smartsight_rpmsg);
+    smartsight_ept   = rpmsg_lite_create_ept(smartsight_rpmsg, SMARTSIGHT_EPT_ADDR, rpmsg_queue_rx_cb, my_queue);
+
     /*
      * Introduce some delay to avoid NS announce message not being captured by the master side.
      * This could happen when the remote side execution is too fast and the NS announce message is triggered
      * before the nameservice_isr_cb is registered on the master side.
      */
-    SDK_DelayAtLeastUs(1000000U, SDK_DEVICE_MAXIMUM_CPU_CLOCK_FREQUENCY);
-    (void)rpmsg_ns_announce(my_rpmsg, my_ept, "rpmsg-raw", RL_NS_CREATE);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    (void)rpmsg_ns_announce(smartsight_rpmsg, smartsight_ept, "rpmsg-raw", RL_NS_CREATE);
 
     PRINTF("\r\nNameservice sent, ready for incoming messages...\r\n");
 
     for (;;)
     {
         /* Get RPMsg rx buffer with message */
-        result = rpmsg_queue_recv(my_rpmsg,
+        result = rpmsg_queue_recv(smartsight_rpmsg,
                                   my_queue,
                                   (uint32_t *)&remote_addr, 
                                   (char *)&ss_cmd,
@@ -333,8 +305,8 @@ void telemetry_task(void *param)
 
         if (remote_addr != 0)
         {
-            (void)rpmsg_lite_send(my_rpmsg,
-                                          my_ept,
+            (void)rpmsg_lite_send(smartsight_rpmsg,
+                                          smartsight_ept,
                                           remote_addr,
                                           (char *)&ss_telemetry,
                                           sizeof(ss_telemetry),
@@ -393,7 +365,7 @@ int main(void)
     }
 
     if (xTaskCreate(telemetry_task, "TELEMETRY_TASK",
-                    TELEMETRY_STACK_SIZE, NULL,
+                    TELEMETRY_TASK_STACK_SIZE, NULL,
                     telemetry_task_priority, &telemetry_task_handle) != pdPASS)
     {
         PRINTF("\r\nFailed to create telemetry task\r\n");

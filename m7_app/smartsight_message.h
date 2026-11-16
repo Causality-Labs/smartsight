@@ -25,8 +25,8 @@ typedef struct
 
 typedef struct
 {
-    uint16_t pan_cdeg;
-    uint16_t tilt_cdeg;
+    int32_t pan_cdeg;
+    int32_t tilt_cdeg;
 } ss_position_payload_t;
 
 typedef struct
@@ -48,12 +48,24 @@ typedef struct
 
 typedef struct
 {
-    ss_header_t header;
-    uint32_t timestamp_ms;
-    int32_t pan_cdeg;
-    int32_t tilt_cdeg;
-    uint16_t status;
-    uint16_t reserved;
+    ss_header_t header;// 4
+    uint32_t timestamp_ms; // 4
+    int32_t pan_cdeg; // 4
+    int32_t tilt_cdeg; //4
+    uint16_t status; //2
+    uint16_t reserved; // 2
 } ss_tel_t;
+
+_Static_assert(sizeof(ss_header_t) == 4,
+               "ss_header_t does not match spec");
+_Static_assert(sizeof(ss_position_payload_t) == 8,
+               "ss_position_payload_t does not match spec");
+_Static_assert(sizeof(ss_ctrl_payload_t) == 4,
+              "ss_ctrl_payload_t does not match spec");
+_Static_assert(sizeof(ss_cmd_t) == 12,
+               "ss_cmd_t does not match spec");
+_Static_assert(sizeof(ss_tel_t) == 20,
+               "ss_tel_t does not match spec");
+
 
 #endif /* SMARTSIGHT_MESSAGE_H */
