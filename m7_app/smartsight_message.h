@@ -7,6 +7,7 @@
 
 #define SS_OP_MOVE 0x00
 #define SS_OP_CTRL 0x01
+#define SS_OP_PROBE 0x02
 #define SS_OP_TELEMETRY 0x80
 
 #define SS_CTRL_ENABLE 0x01

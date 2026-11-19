@@ -149,6 +149,10 @@ void message_task(void *param)
                 }
                 break;
             }
+            case SS_OP_PROBE:
+            {
+                PRINTF("\r\nRecieved a probe from a program..\r\n");
+            }
             default:
                 break;
 
